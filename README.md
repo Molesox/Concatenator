@@ -23,8 +23,6 @@ Idéal pour développeurs, analystes ou toute personne travaillant avec de gros 
 
 ![Interface principale](assets/screenshot.png)
 
-*(Ajoutez d'autres images si besoin dans le dossier `/assets`)*
-
 ---
 
 ## 📥 Téléchargement
