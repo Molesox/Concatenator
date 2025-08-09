@@ -20,3 +20,4 @@ py-modules = ["core", "models", "ui_mainwindow", "main"]
 concatenator = "main:main"
 
 
+
