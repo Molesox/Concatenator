@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- C stylisé -->
+  <path d="M384 128
+           C352 96, 304 80, 256 80
+           C160 80, 96 160, 96 256
+           C96 352, 160 432, 256 432
+           C304 432, 352 416, 384 384"
+        stroke="currentColor"
+        stroke-width="40"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+
+  <!-- Flèche dynamique -->
+  <path d="M288 256h144" stroke="currentColor" stroke-width="36" stroke-linecap="round" />
+  <path d="M384 192l64 64-64 64"
+        stroke="currentColor"
+        stroke-width="36"
+        stroke-linecap="round"
+        stroke-linejoin="round" />
+</svg>

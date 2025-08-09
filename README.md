@@ -1,10 +1,14 @@
 
-# 🚀 Concatenator — L’outil ultime pour fusionner vos fichiers texte
+<h1 align="center">
+  <img src="icons/app.svg" alt="Concatenator logo" width="48" height="48" style="vertical-align: middle;">
+  oncatenator
+</h1>
 
 [![CI](https://github.com/Molesox/Concatenator/actions/workflows/python-ci.yml/badge.svg)](https://github.com/Molesox/Concatenator/actions/workflows/python-ci.yml)
 [![Release](https://github.com/Molesox/Concatenator/actions/workflows/release-multi-os.yml/badge.svg)](https://github.com/Molesox/Concatenator/actions/workflows/release-multi-os.yml)
 
-**Concatenator** est une application graphique moderne en **PySide6** pour rassembler le contenu de plusieurs fichiers texte en un seul, avec style et efficacité.  
+
+**Concatenator** est une application graphique  en **PySide6** pour rassembler le contenu de plusieurs fichiers texte en un seul, avec style et efficacité.  
 Idéal pour développeurs, analystes ou toute personne travaillant avec de gros ensembles de fichiers.
 
 ✨ **Points forts** :
@@ -64,20 +68,7 @@ pyinstaller --noconfirm --onefile --windowed --name Concatenator main.py
 # L'exécutable sera dans dist/
 ```
 
----
 
-## 🏷️ Releases automatiques
-
-Les builds multi-OS sont générés **automatiquement** quand vous poussez un tag version `vX.Y.Z` :
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Quelques minutes plus tard, la release est disponible sur GitHub.
-
----
 
 ## 📜 Licence
 
