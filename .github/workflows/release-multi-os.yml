@@ -48,18 +48,23 @@ jobs:
       - name: Build (Windows)
         if: matrix.os_name == 'windows'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name Concatenator main.py
+          pyinstaller --noconfirm --onefile --windowed --name Concatenator ^
+            --add-data "icons;icons" ^
+            main.py
           dir dist
       - name: Build (macOS)
         if: matrix.os_name == 'macos'
         run: |
-          # .app (GUI, pas de console)
-          pyinstaller --noconfirm --windowed --name Concatenator main.py
+          pyinstaller --noconfirm --onefile --windowed --name Concatenator \
+            --add-data "icons:icons" \
+            main.py
           ls -la dist
       - name: Build (Linux)
         if: matrix.os_name == 'linux'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name Concatenator main.py
+          pyinstaller --noconfirm --onefile --windowed --name Concatenator \
+            --add-data "icons:icons" \
+            main.py
           ls -la dist
 
       # --- Emballage par OS ---

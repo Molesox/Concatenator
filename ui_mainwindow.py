@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import pathlib
 from typing import Iterable, List, Optional, cast
-
+import sys
+import pathlib
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtCore import QByteArray
@@ -33,7 +34,10 @@ ROLE_HOOKED = ROLE_META + 1                        # bool: hook de propagation d
 
 # ------------------------ Widgets ------------------------
 def _icons_dir() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parent / "icons"
+    # En exécution PyInstaller, les données sont extraites sous sys._MEIPASS
+    base = pathlib.Path(getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent))
+    return base / "icons"
+
 
 def _render_svg_to_icon(svg_path: pathlib.Path, size: QSize, color: QColor) -> QIcon:
     if not svg_path.exists():
