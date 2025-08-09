@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "concatenator"
+version = "1.0.0"
+description = "Outil graphique pour concaténer des fichiers texte (PySide6)"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Daniel", email = "sanz.daniel95@gmail.com" }]
+license = { text = "MIT" }
+keywords = ["concat", "pyside6", "qt", "tools"]
+dependencies = ["PySide6>=6.6"]
+
+[tool.setuptools]
+py-modules = ["core", "models", "ui_mainwindow", "main"]
+
+[project.scripts]
+concatenator = "main:main"
