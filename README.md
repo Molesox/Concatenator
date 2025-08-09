@@ -1,7 +1,6 @@
 
 <h1 align="center">
-  <img src="icons/app.svg" alt="Concatenator logo" width="48" height="48" style="vertical-align: middle;">
-  oncatenator
+  <img src="icons/app.svg" alt="Concatenator logo" width="48" height="48" style="vertical-align: middle;"> oncatenator
 </h1>
 
 [![CI](https://github.com/Molesox/Concatenator/actions/workflows/python-ci.yml/badge.svg)](https://github.com/Molesox/Concatenator/actions/workflows/python-ci.yml)
