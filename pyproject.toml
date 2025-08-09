@@ -19,3 +19,4 @@ py-modules = ["core", "models", "ui_mainwindow", "main"]
 [project.scripts]
 concatenator = "main:main"
 
+
