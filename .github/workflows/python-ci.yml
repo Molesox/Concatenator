@@ -24,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Install Qt dependencies
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1-mesa-glx
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1
       - name: Smoke test (imports et --help)
         run: |
           python -c "import core, models, ui_mainwindow; print('Imports OK')"
