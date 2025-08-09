@@ -1,9 +1,13 @@
 name: Release (Windows / macOS / Linux)
 
+permissions:
+  contents: write # Nécessaire pour créer des releases et uploader des assets
+
 on:
   push:
     tags:
       - "v*"
+
 
 jobs:
   build:
