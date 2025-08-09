@@ -47,6 +47,7 @@ jobs:
       # --- Build (commandes adaptées selon OS) ---
       - name: Build (Windows)
         if: matrix.os_name == 'windows'
+        shell: cmd
         run: |
           pyinstaller --noconfirm --onefile --windowed --name Concatenator ^
             --add-data "icons;icons" ^
