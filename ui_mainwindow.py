@@ -4,22 +4,17 @@ import os
 import pathlib
 from typing import Iterable, List, Optional, cast
 import sys
+import datetime
+
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtGui import QPainter, QColor
-from PySide6.QtCore import QByteArray
-from PySide6.QtWidgets import QApplication
-
-from PySide6.QtCore import (
-    Qt, QMimeData, QSize, QSettings, QUrl, QByteArray, QTimer
-)
- 
-
-from PySide6.QtGui import QPalette, QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QPainter, QColor, QPalette, QDesktopServices, QIcon, QPixmap, QFont
+from PySide6.QtCore import Qt, QMimeData, QSize, QSettings, QUrl, QByteArray, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeWidget, QTreeWidgetItem,
     QPushButton, QFileDialog, QLineEdit,
-    QCheckBox, QDoubleSpinBox, QLabel, QMessageBox, QProgressBar, QGroupBox,
+    QCheckBox, QDoubleSpinBox, QLabel, QProgressBar, QGroupBox,
     QSplitter, QComboBox, QInputDialog, QAbstractItemView, QHeaderView, QToolButton
 )
 
@@ -78,6 +73,31 @@ def ico(name: str, size: QSize = QSize(20, 20), color: QColor | None = None) -> 
             color = QColor("#000000")
     return _render_svg_to_icon(p, size, color)
 
+
+# ----- Helpers d’éléments (chemin plein + rendu nom en gras) -----
+def set_item_path_display(item: QTreeWidgetItem, fullpath: str, typ: str, populated: bool = False):
+    """
+    Affiche le *basename* en colonne, met le chemin complet en tooltip,
+    et stocke le fullpath dans ROLE_META.
+    typ: 'file' | 'dir'
+    """
+    base = os.path.basename(fullpath.rstrip(os.sep)) or fullpath
+    item.setText(0, base)
+    item.setToolTip(0, fullpath)
+    meta = {'type': typ, 'fullpath': fullpath, 'populated': populated}
+    item.setData(0, ROLE_META, meta)
+    # Style : fichiers en gras, dossiers normal
+    f = item.font(0)
+    f.setBold(typ == 'file')
+    item.setFont(0, f)
+
+def get_item_fullpath(item: QTreeWidgetItem) -> str:
+    meta = item.data(0, ROLE_META) or {}
+    if isinstance(meta, dict) and 'fullpath' in meta:
+        return cast(str, meta['fullpath'])
+    return item.text(0)
+
+
 # ----- Liste avec DnD + colonne bouton supprimer -----
 class DropTreeWidget(QTreeWidget):
     def __init__(self, parent=None, get_files_cb=None, mark_dirty_cb=None):
@@ -99,8 +119,8 @@ class DropTreeWidget(QTreeWidget):
         self.itemExpanded.connect(self._maybe_populate_children)
         self.setUniformRowHeights(True)
         self.setAllColumnsShowFocus(True)
-        self.setIndentation(10)      
-        self.setIconSize(QSize(16,16))  
+        self.setIndentation(10)
+        self.setIconSize(QSize(16,16))
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -132,30 +152,32 @@ class DropTreeWidget(QTreeWidget):
         for i in range(self.topLevelItemCount()):
             it = self.topLevelItem(i)
             if it is not None:
-                existing.add(it.text(0))
+                existing.add(get_item_fullpath(it))
         for p in unique_paths(paths):
             if p in existing:
                 continue
-            it = QTreeWidgetItem([p])
+            it = QTreeWidgetItem([""])
+            if os.path.isdir(p):
+                set_item_path_display(it, p, 'dir', populated=False)
+                it.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+            else:
+                set_item_path_display(it, p, 'file', populated=True)
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             it.setCheckState(0, Qt.CheckState.Checked)
-            it.setData(0, ROLE_META, {'type': 'dir' if os.path.isdir(p) else 'file', 'populated': False})
-            if os.path.isdir(p):
-                it.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
             self.addTopLevelItem(it)
             self._attach_remove_button(it)
         if self.mark_dirty_cb:
             self.mark_dirty_cb()
 
     def selected_paths(self) -> List[str]:
-        return [i.text(0) for i in self.selectedItems() if not i.parent()]
+        return [get_item_fullpath(i) for i in self.selectedItems() if not i.parent()]
 
     def all_paths(self) -> List[str]:
         out: List[str] = []
         for i in range(self.topLevelItemCount()):
             it = self.topLevelItem(i)
             if it is not None:
-                out.append(it.text(0))
+                out.append(get_item_fullpath(it))
         return out
 
     def checked_paths(self) -> List[str]:
@@ -177,7 +199,7 @@ class DropTreeWidget(QTreeWidget):
                 return False, []
 
             if item.childCount() == 0:
-                return True, [item.text(0)]
+                return True, [get_item_fullpath(item)]
 
             all_checked = True
             paths: List[str] = []
@@ -191,7 +213,7 @@ class DropTreeWidget(QTreeWidget):
                 paths.extend(ch_paths)
 
             if all_checked:
-                return True, [item.text(0)]
+                return True, [get_item_fullpath(item)]
             return True, paths
 
         out: List[str] = []
@@ -251,13 +273,13 @@ class DropTreeWidget(QTreeWidget):
             meta = {}
         if meta.get('type') != 'dir' or meta.get('populated') or self.get_files_cb is None:
             return
-        dir_path = item.text(0)
+        dir_path = cast(str, meta.get('fullpath') or item.text(0))
         files = self.get_files_cb([dir_path]) or []
         for fp in files:
-            child = QTreeWidgetItem([fp])
+            child = QTreeWidgetItem([""])
+            set_item_path_display(child, fp, 'file', populated=True)
             child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             child.setCheckState(0, Qt.CheckState.Checked)
-            child.setData(0, ROLE_META, {'type': 'file'})
             item.addChild(child)
             self._attach_remove_button(child)
         meta['populated'] = True
@@ -274,14 +296,15 @@ class DropTreeWidget(QTreeWidget):
             self.itemChanged.connect(on_changed)  # type: ignore[arg-type]
             item.setData(0, ROLE_HOOKED, True)
 
+
 # ----- Fenêtre principale -----
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Concatenator - Sélection & concaténation")
         self.setWindowIcon(ico("app.svg", QSize(24, 24)))
-        self.resize(980, 680)
-    
+        self.resize(980, 720)
+
         self.dirty = False
         self._block_dirty = False
         self._cancel_concat = False
@@ -306,12 +329,8 @@ class MainWindow(QMainWindow):
         self.btn_prof_new = QToolButton(); self.btn_prof_new.setAutoRaise(True); self.btn_prof_new.setIcon(ico("new_profile.svg")); self.btn_prof_new.setIconSize(QSize(18, 18))
         self.btn_prof_rename = QToolButton(); self.btn_prof_rename.setAutoRaise(True); self.btn_prof_rename.setIcon(ico("edit.svg")); self.btn_prof_rename.setIconSize(QSize(18, 18))
         self.btn_prof_delete = QToolButton(); self.btn_prof_delete.setAutoRaise(True); self.btn_prof_delete.setIcon(ico("delete.svg")); self.btn_prof_delete.setIconSize(QSize(18, 18))
-
-        prof_row.addStretch(1)
+       
       
-        prof_row.addSpacing(8)
-
-        prof_row.addSpacing(16)
         prof_row.addWidget(QLabel("Profil :"))
         prof_row.addWidget(self.cmb_profile, 1)
         prof_row.addWidget(self.btn_prof_new)
@@ -322,12 +341,15 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         self.btn_add_files = QToolButton(); self.btn_add_files.setAutoRaise(True); self.btn_add_files.setIcon(ico("add_file.svg")); self.btn_add_files.setIconSize(QSize(20, 20))
         self.btn_add_dirs = QToolButton(); self.btn_add_dirs.setAutoRaise(True); self.btn_add_dirs.setIcon(ico("add_folder.svg")); self.btn_add_dirs.setIconSize(QSize(20, 20))
+        self.btn_reload = QToolButton(); self.btn_reload.setAutoRaise(True); self.btn_reload.setIcon(ico("refresh.svg")); self.btn_reload.setIconSize(QSize(20, 20))
         self.btn_clear = QToolButton(); self.btn_clear.setAutoRaise(True); self.btn_clear.setIcon(ico("delete.svg")); self.btn_clear.setIconSize(QSize(20, 20))
         self.btn_add_files.setToolTip("Ajouter des fichiers…")
         self.btn_add_dirs.setToolTip("Ajouter des dossiers…")
+        self.btn_reload.setToolTip("Recharger les dossiers (rescanner le contenu)")
         self.btn_clear.setToolTip("Vider la liste")
         top.addWidget(self.btn_add_files)
         top.addWidget(self.btn_add_dirs)
+        top.addWidget(self.btn_reload)
         top.addWidget(self.btn_clear)
         top.addStretch(1)
         root.addLayout(top)
@@ -398,16 +420,46 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.btn_copy)
         root.addLayout(actions)
 
+        # ----- Footer notifications (3/4) + branding (1/4) -----
+        footer = QHBoxLayout()
+        self.cmb_notifs = QComboBox()
+        self.cmb_notifs.setInsertPolicy(QComboBox.InsertPolicy.InsertAtTop)
+        self.cmb_notifs.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cmb_notifs.setToolTip("Ouvrez pour voir les dernières notifications")
+        self.cmb_notifs.setStyleSheet("""
+            QComboBox {
+                padding: 3px 15px;
+                border: 1px solid rgba(128,128,128,0.35);
+                border-radius: 2px;
+                background: rgba(0,0,0,0.03);
+                font-size: 12px;
+            }
+            QComboBox::drop-down {
+                width: 24px;
+                border: 0;
+            }
+            QComboBox QAbstractItemView {
+                border: 1px solid rgba(128,128,128,0.35);
+                selection-background-color: rgba(0,0,0,0.07);
+                outline: 0;
+            }
+        """)
+        footer.addWidget(self.cmb_notifs, 3)
+      
+        root.addLayout(footer)
+
         self.menuBar().hide()
 
+        # Connexions
         self.btn_add_files.clicked.connect(self.on_add_files)
         self.btn_add_dirs.clicked.connect(self.on_add_dirs)
+        self.btn_reload.clicked.connect(self.on_reload)
         self.btn_clear.clicked.connect(self.on_clear)
         self.btn_browse_out.clicked.connect(self.on_browse_out)
         self.btn_concat.clicked.connect(self.on_concat)
         self.btn_copy.clicked.connect(self.on_copy_to_clipboard)
         self.btn_open_out.clicked.connect(self.on_open_out)
-      
+
         self.cmb_profile.currentIndexChanged.connect(self.on_profile_combo_changed)
         self.btn_prof_new.clicked.connect(self.on_profile_new)
         self.btn_prof_rename.clicked.connect(self.on_profile_rename)
@@ -431,6 +483,31 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(ico("app.svg", QSize(24, 24)))
         self._fix_delete_column_width()
 
+        # Notif d’accueil légère
+        self.notify("Prêt.", details="Glissez-déposez des fichiers ou dossiers, puis Concaténer / Copier.")
+
+    # ----- Notifications -----
+    def notify(self, message: str, level: str = "info", details: Optional[str] = None):
+        """
+        Ajoute une notification en tête de la combo (historique max 4).
+        - message: texte court visible
+        - details: texte long en infobulle (optionnel)
+        """
+        text = message.strip()
+        if not text:
+            return
+        # Insérer en tête
+        self.cmb_notifs.insertItem(0, text)
+        if details:
+            self.cmb_notifs.setItemData(0, details, Qt.ItemDataRole.ToolTipRole)
+        else:
+            self.cmb_notifs.setItemData(0, text, Qt.ItemDataRole.ToolTipRole)
+        self.cmb_notifs.setCurrentIndex(0)
+        # Limiter à 4
+        while self.cmb_notifs.count() > 4:
+            self.cmb_notifs.removeItem(self.cmb_notifs.count() - 1)
+
+    # ----- Divers helpers UI -----
     def _fix_delete_column_width(self):
         try:
             self.listw.fix_delete_column_width()
@@ -501,6 +578,7 @@ class MainWindow(QMainWindow):
         name = self.cmb_profile.itemText(idx)
         self.load_profile_from_settings(name)
         self._last_profile_name = name
+        self.notify(f"Profil « {name} » chargé.")
 
     def on_profile_new(self):
         name, ok = QInputDialog.getText(self, "Nouveau profil", "Nom du profil :")
@@ -508,12 +586,13 @@ class MainWindow(QMainWindow):
             return
         name = name.strip()
         if name in self.list_profiles():
-            QMessageBox.warning(self, "Existe déjà", f"Le profil '{name}' existe déjà.")
+            self.notify(f"Le profil « {name} » existe déjà.", level="warn")
             return
         self.save_profile_to_settings(name)
         self.refresh_profiles_combo(select=name)
         self.clear_dirty()
         self._last_profile_name = name
+        self.notify(f"Profil « {name} » créé.")
 
     def on_profile_rename(self):
         old = self.current_profile_name()
@@ -526,7 +605,7 @@ class MainWindow(QMainWindow):
         if new == old:
             return
         if new in self.list_profiles():
-            QMessageBox.warning(self, "Existe déjà", f"Le profil '{new}' existe déjà.")
+            self.notify(f"Le profil « {new} » existe déjà.", level="warn")
             return
         s = QSettings()
         s.beginGroup(self.profiles_root())
@@ -543,17 +622,13 @@ class MainWindow(QMainWindow):
         self.refresh_profiles_combo(select=new)
         self.clear_dirty()
         self._last_profile_name = new
+        self.notify(f"Profil renommé en « {new} ».")
 
     def on_profile_delete(self):
         name = self.current_profile_name()
         if not name:
             return
-        if QMessageBox.question(
-            self, "Supprimer le profil",
-            f"Supprimer définitivement le profil '{name}' ?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No
-        ) != QMessageBox.StandardButton.Yes:
-            return
+        # Suppression directe (pas de popup) + notification
         s = QSettings()
         s.beginGroup(self.profiles_root())
         s.remove(name)
@@ -564,6 +639,7 @@ class MainWindow(QMainWindow):
         self.load_profile_from_settings(self.current_profile_name())
         self.clear_dirty()
         self._last_profile_name = self.current_profile_name()
+        self.notify(f"Profil « {name} » supprimé.")
 
     # ----- Enregistrement / chargement d'un profil -----
     def save_profile_to_settings(self, prof_name: str):
@@ -577,7 +653,7 @@ class MainWindow(QMainWindow):
             if it is None:
                 continue
             chk = '1' if it.checkState(0) == Qt.CheckState.Checked else '0'
-            items.append(f"{it.text(0)}|{chk}")
+            items.append(f"{get_item_fullpath(it)}|{chk}")
         s.setValue("list/items", items)
 
         s.setValue("opts/exts", self.ed_exts.text())
@@ -617,12 +693,14 @@ class MainWindow(QMainWindow):
                     if path in existing:
                         continue
                     existing.add(path)
-                    it = QTreeWidgetItem([path])
+                    it = QTreeWidgetItem([""])
+                    if os.path.isdir(path):
+                        set_item_path_display(it, path, 'dir', populated=False)
+                        it.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+                    else:
+                        set_item_path_display(it, path, 'file', populated=True)
                     it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     it.setCheckState(0, Qt.CheckState.Checked if chk == '1' else Qt.CheckState.Unchecked)
-                    it.setData(0, ROLE_META, {'type': 'dir' if os.path.isdir(path) else 'file', 'populated': False})
-                    if os.path.isdir(path):
-                        it.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
                     self.listw.addTopLevelItem(it)
                     self.listw._attach_remove_button(it)
             self.listw.blockSignals(False)
@@ -670,6 +748,7 @@ class MainWindow(QMainWindow):
             QSettings().setValue("profiles/current", prof_name)
         finally:
             self._block_dirty = False
+
     def init_profiles_and_load(self):
         self.ensure_default_profile()
         last = QSettings().value("profiles/current")
@@ -679,32 +758,57 @@ class MainWindow(QMainWindow):
             self.set_current_profile_name("Défaut")
         self.load_profile_from_settings(self.current_profile_name())
 
-        # ----- Slots -----
+    # ----- Slots -----
     def on_open_out(self):
         path = self.ed_out.text().strip()
         if path and os.path.exists(path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            self.notify("Fichier de sortie ouvert.", details=path)
         else:
-            QMessageBox.warning(self, "Fichier introuvable", "Le fichier spécifié n'existe pas.")
+            self.notify("Fichier introuvable.", level="warn", details=path or "(vide)")
 
     def on_clear(self):
         self.listw.clear()
         self.mark_dirty()
+        self.notify("Liste vidée.")
+
+    def on_reload(self):
+        """Re-scanne le contenu des dossiers listés (utile après changements)."""
+        # Pour chaque dossier racine : vider les enfants et re-populer
+        count_dirs = 0
+        for i in range(self.listw.topLevelItemCount()):
+            it = self.listw.topLevelItem(i)
+            if it is None:
+                continue
+            meta = it.data(0, ROLE_META) or {}
+            if isinstance(meta, dict) and meta.get('type') == 'dir':
+                # Flush enfants
+                while it.childCount() > 0:
+                    it.takeChild(0)
+                meta['populated'] = False
+                it.setData(0, ROLE_META, meta)
+                # Re-populer immédiatement
+                self.listw._maybe_populate_children(it)
+                count_dirs += 1
+        self.notify("Reload terminé.", details=f"{count_dirs} dossier(s) rescanné(s).")
 
     def on_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Choisir des fichiers")
         if files:
             self.listw.add_paths(files)
+            self.notify("Fichiers ajoutés.", details="\n".join(files[:6] + (["…"] if len(files) > 6 else [])))
 
     def on_add_dirs(self):
         dirpath = QFileDialog.getExistingDirectory(self, "Choisir un dossier")
         if dirpath:
             self.listw.add_paths([dirpath])
+            self.notify("Dossier ajouté.", details=dirpath)
 
     def on_browse_out(self):
         path, _ = QFileDialog.getSaveFileName(self, "Enregistrer sous", self.ed_out.text(), "Text (*.txt);;Tous (*.*)")
         if path:
             self.ed_out.setText(path)
+            self.notify("Chemin de sortie défini.", details=path)
 
     def current_options(self) -> Options:
         return Options(
@@ -732,17 +836,17 @@ class MainWindow(QMainWindow):
 
         paths = self.listw.checked_paths()
         if not paths:
-            QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
+            self.notify("Rien à faire.", level="warn", details="Cochez au moins un élément.")
             return
         opts = self.current_options()
         out_path = self.ed_out.text().strip()
         if not out_path:
-            QMessageBox.warning(self, "Chemin manquant", "Spécifiez un fichier de sortie.")
+            self.notify("Chemin manquant.", level="warn", details="Spécifiez un fichier de sortie.")
             return
 
         files = self.gather_candidate_files(paths, opts)
         if not files:
-            QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
+            self.notify("Aucun fichier correspondant.", level="warn", details="Vérifiez filtres et exclusions.")
             return
 
         self.progress.setValue(0)
@@ -764,14 +868,17 @@ class MainWindow(QMainWindow):
                 os.remove(out_path)
             except Exception:
                 pass
-            QMessageBox.information(self, "Annulé", "Concaténation annulée.")
+            self.notify("Concaténation annulée.")
         else:
             self.progress.setValue(100)
-            msg = [f"Concaténation terminée : {written} fichier(s) écrit(s).", f"Sortie : {out_path}",]
+            details_lines = [f"Sortie : {out_path}", f"Écrits : {written} fichier(s)."]
             if skipped:
-                msg.append("\nFichiers ignorés :")
-                msg.extend([f"- {p} ({why})" for p, why in skipped])
-            QMessageBox.information(self, "Terminé", "".join(msg))
+                details_lines.append(f"Ignorés : {len(skipped)}")
+                preview = "\n".join([f"- {p} ({why})" for p, why in skipped[:5]])
+                if len(skipped) > 5:
+                    preview += "\n…"
+                details_lines.append(preview)
+            self.notify("Concaténation terminée.", details="\n".join(details_lines))
         finally:
             self.btn_concat.setText("Concaténer")
             self._concat_running = False
@@ -781,12 +888,12 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QApplication
         paths = self.listw.checked_paths()
         if not paths:
-            QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
+            self.notify("Rien à copier.", level="warn", details="Cochez au moins un élément.")
             return
         opts = self.current_options()
         files = self.gather_candidate_files(paths, opts)
         if not files:
-            QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
+            self.notify("Aucun fichier correspondant.", level="warn", details="Vérifiez filtres et exclusions.")
             return
         self.progress.setValue(0)
         def cb(i, total):
@@ -795,11 +902,14 @@ class MainWindow(QMainWindow):
         final_text, written, skipped = concat_to_string(files, opts, cb)
         self.progress.setValue(100)
         QApplication.clipboard().setText(final_text)
-        msg = [f"Concaténation copiée dans le presse-papiers : {written} fichier(s)."]
+        details_lines = [f"Fichiers copiés : {written}."]
         if skipped:
-            msg.append("Fichiers ignorés :")
-            msg.extend([f"- {p} ({why})" for p, why in skipped])
-        QMessageBox.information(self, "Presse-papiers", "".join(msg))
+            details_lines.append(f"Ignorés : {len(skipped)}")
+            preview = "\n".join([f"- {p} ({why})" for p, why in skipped[:5]])
+            if len(skipped) > 5:
+                preview += "\n…"
+            details_lines.append(preview)
+        self.notify("Concaténation copiée dans le presse-papiers.", details="\n".join(details_lines))
 
     def closeEvent(self, event):
         try:
