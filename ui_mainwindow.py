@@ -31,7 +31,12 @@ from core import (
 
 ROLE_META = int(Qt.ItemDataRole.UserRole)
 ROLE_HOOKED = ROLE_META + 1
- 
+
+
+class ConcatCancelled(Exception):
+    """Exception levée pour interrompre la concaténation."""
+    pass
+
 
 # ----- Icônes (SVG recolorés selon la palette) -----
 def _icons_dir() -> pathlib.Path:
@@ -279,6 +284,8 @@ class MainWindow(QMainWindow):
     
         self.dirty = False
         self._block_dirty = False
+        self._cancel_concat = False
+        self._concat_running = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -719,6 +726,10 @@ class MainWindow(QMainWindow):
 
     def on_concat(self):
         from PySide6.QtWidgets import QApplication
+        if self._concat_running:
+            self._cancel_concat = True
+            return
+
         paths = self.listw.checked_paths()
         if not paths:
             QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
@@ -733,17 +744,38 @@ class MainWindow(QMainWindow):
         if not files:
             QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
             return
+
         self.progress.setValue(0)
+        self.btn_concat.setText("Annuler")
+        self._cancel_concat = False
+        self._concat_running = True
+
         def cb(i, total):
             self._set_progress(i, total)
             QApplication.processEvents()
-        written, skipped = concat_to_file(files, opts, out_path, cb)
-        self.progress.setValue(100)
-        msg = [f"Concaténation terminée : {written} fichier(s) écrit(s).", f"Sortie : {out_path}",]
-        if skipped:
-            msg.append("\nFichiers ignorés :")
-            msg.extend([f"- {p} ({why})" for p, why in skipped])
-        QMessageBox.information(self, "Terminé", "".join(msg))
+            if self._cancel_concat:
+                raise ConcatCancelled()
+
+        try:
+            written, skipped = concat_to_file(files, opts, out_path, cb)
+        except ConcatCancelled:
+            self.progress.setValue(0)
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+            QMessageBox.information(self, "Annulé", "Concaténation annulée.")
+        else:
+            self.progress.setValue(100)
+            msg = [f"Concaténation terminée : {written} fichier(s) écrit(s).", f"Sortie : {out_path}",]
+            if skipped:
+                msg.append("\nFichiers ignorés :")
+                msg.extend([f"- {p} ({why})" for p, why in skipped])
+            QMessageBox.information(self, "Terminé", "".join(msg))
+        finally:
+            self.btn_concat.setText("Concaténer")
+            self._concat_running = False
+            self._cancel_concat = False
 
     def on_copy_to_clipboard(self):
         from PySide6.QtWidgets import QApplication
