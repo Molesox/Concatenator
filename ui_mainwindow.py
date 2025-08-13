@@ -4,20 +4,21 @@ import os
 import pathlib
 from typing import Iterable, List, Optional, cast
 import sys
-import pathlib
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtCore import QByteArray
 from PySide6.QtWidgets import QApplication
 
 from PySide6.QtCore import (
-    Qt, QMimeData, QSize, QSettings, QCoreApplication, QUrl, QByteArray, QTimer
+    Qt, QMimeData, QSize, QSettings, QUrl, QByteArray, QTimer
 )
-from PySide6.QtGui import QPalette, QAction, QDesktopServices, QIcon, QPixmap
+from PySide6.QtWidgets import QProxyStyle, QStyle, QStyleFactory, QStyleOption
+
+from PySide6.QtGui import QPalette, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeWidget, QTreeWidgetItem,
-    QPushButton, QFileDialog, QLineEdit, QStyle,
+    QPushButton, QFileDialog, QLineEdit,
     QCheckBox, QDoubleSpinBox, QLabel, QMessageBox, QProgressBar, QGroupBox,
     QSplitter, QComboBox, QInputDialog, QAbstractItemView, QHeaderView, QToolButton
 )
@@ -28,57 +29,73 @@ from core import (
     gather_candidate_files, concat_to_file, concat_to_string
 )
 
-# Rôles custom pour stocker des infos sur les items
-ROLE_META = int(Qt.ItemDataRole.UserRole)          # dict {type, populated}
-ROLE_HOOKED = ROLE_META + 1                        # bool: hook de propagation déjà installé
+ROLE_META = int(Qt.ItemDataRole.UserRole)
+ROLE_HOOKED = ROLE_META + 1
 
-# ------------------------ Widgets ------------------------
+
+class CompactStyle(QProxyStyle):
+    def __init__(self, base: str = "Fusion"):
+        super().__init__(QStyleFactory.create(base))
+
+    def pixelMetric(
+        self,
+        metric: QStyle.PixelMetric,
+        option: QStyleOption | None = None,
+        widget: QWidget | None = None,
+        ) -> int:
+        # Réduit la plupart des marges/espacements par défaut
+        tiny = 2
+        very_tiny = 1
+        if metric in (
+            QStyle.PixelMetric.PM_DefaultFrameWidth,
+            QStyle.PixelMetric.PM_ButtonMargin,
+            QStyle.PixelMetric.PM_FocusFrameHMargin,
+            QStyle.PixelMetric.PM_FocusFrameVMargin,
+            QStyle.PixelMetric.PM_LayoutLeftMargin,
+            QStyle.PixelMetric.PM_LayoutTopMargin,
+            QStyle.PixelMetric.PM_LayoutRightMargin,
+            QStyle.PixelMetric.PM_LayoutBottomMargin,
+            QStyle.PixelMetric.PM_LayoutHorizontalSpacing,
+            QStyle.PixelMetric.PM_LayoutVerticalSpacing,
+        ):
+            return tiny
+        if metric in (QStyle.PixelMetric.PM_ScrollBarExtent,):
+            return 10  # scrollbars plus fins
+        return super().pixelMetric(metric, option, widget)
+    
+
+# ----- Icônes (SVG recolorés selon la palette) -----
 def _icons_dir() -> pathlib.Path:
-    # En exécution PyInstaller, les données sont extraites sous sys._MEIPASS
     base = pathlib.Path(getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent))
     return base / "icons"
 
-
 def _render_svg_to_icon(svg_path: pathlib.Path, size: QSize, color: QColor) -> QIcon:
     if not svg_path.exists():
-        print(f"[icons] Introuvable: {svg_path}")
         return QIcon()
-
     try:
         txt = svg_path.read_text(encoding="utf-8")
-    except Exception as e:
-        print(f"[icons] Lecture échouée {svg_path}: {e}")
+    except Exception:
         return QIcon()
-
-    # Remplace currentColor par la couleur demandée (#RRGGBB)
-    hex_color = color.name()
-    txt = txt.replace("currentColor", hex_color)
-
+    txt = txt.replace("currentColor", color.name())
     ba = QByteArray(txt.encode("utf-8"))
     renderer = QSvgRenderer(ba)
     if not renderer.isValid():
-        print(f"[icons] SVG invalide (QtSvg OK ?) : {svg_path}")
         return QIcon()
-
-    # HiDPI aware
     screen = QApplication.primaryScreen()
     dpr = screen.devicePixelRatio() if screen else 1.0
     pm = QPixmap(int(size.width() * dpr), int(size.height() * dpr))
     pm.setDevicePixelRatio(dpr)
     pm.fill(Qt.GlobalColor.transparent)
-
     painter = QPainter(pm)
     try:
         renderer.render(painter)
     finally:
         painter.end()
-
     return QIcon(pm)
 
 def ico(name: str, size: QSize = QSize(20, 20), color: QColor | None = None) -> QIcon:
     p = _icons_dir() / name
     if color is None:
-        # Utilise une couleur de texte de bouton (bonne pour les ToolButtons)
         pal = QApplication.palette()
         color = pal.color(QPalette.ColorRole.ButtonText)
         if not color.isValid():
@@ -87,38 +104,30 @@ def ico(name: str, size: QSize = QSize(20, 20), color: QColor | None = None) -> 
             color = QColor("#000000")
     return _render_svg_to_icon(p, size, color)
 
-
+# ----- Liste avec DnD + colonne bouton supprimer -----
 class DropTreeWidget(QTreeWidget):
-    """QTreeWidget avec glisser-déposer.
-       Top-level = fichiers/dossiers ajoutés par l'utilisateur.
-       Enfants = fichiers d'un dossier (peuplés à l'expansion), tous avec checkbox.
-       Colonne 1 = bouton ✕ pour retirer l'élément de la liste.
-    """
     def __init__(self, parent=None, get_files_cb=None, mark_dirty_cb=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setAlternatingRowColors(True)
         self.setMinimumHeight(200)
-        self.setColumnCount(2)  # 0: chemin, 1: bouton X
-
+        self.setColumnCount(2)
         hdr = self.header()
         hdr.setVisible(False)
         hdr.setStretchLastSection(False)
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)   # chemin s'étire
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)     # bouton fixe
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(1, 28)
-
-        # Empêche que le texte soit rogné inutilement
         self.setTextElideMode(Qt.TextElideMode.ElideNone)
-
         self.get_files_cb = get_files_cb
         self.mark_dirty_cb = mark_dirty_cb
         self.itemExpanded.connect(self._maybe_populate_children)
         self.setUniformRowHeights(True)
         self.setAllColumnsShowFocus(True)
+        self.setIndentation(10)      
+        self.setIconSize(QSize(16,16))  
 
-    # --- DnD ---
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
@@ -220,16 +229,37 @@ class DropTreeWidget(QTreeWidget):
             out.extend(paths)
         return out
 
-    # --- internes ---
     def _attach_remove_button(self, item: QTreeWidgetItem):
-        # QToolButton avec icône "delete" (Material), recolorable via palette
         btn = QToolButton()
         btn.setAutoRaise(True)
         btn.setIcon(ico("delete.svg"))
         btn.setIconSize(QSize(16, 16))
         btn.setToolTip("Retirer cet élément de la liste")
+        btn.setStyleSheet("QToolButton{padding:0;margin:0;border:0;}")
         btn.clicked.connect(lambda _=False, it=item: self._remove_item(it))
         self.setItemWidget(item, 1, btn)
+        self._ensure_delete_col_width_for(btn)
+
+    def _ensure_delete_col_width_for(self, btn: QToolButton):
+        w = btn.sizeHint().width() + 10
+        if w > self.columnWidth(1):
+            self.setColumnWidth(1, w)
+
+    def fix_delete_column_width(self):
+        maxw = self.columnWidth(1)
+        for i in range(self.topLevelItemCount()):
+            it = self.topLevelItem(i)
+            if it is not None:
+                w = self.itemWidget(it, 1)
+                if isinstance(w, QToolButton):
+                    maxw = max(maxw, w.sizeHint().width() + 10)
+                for j in range(it.childCount()):
+                    ch = it.child(j)
+                    if ch is not None:
+                        w = self.itemWidget(ch, 1)
+                        if isinstance(w, QToolButton):
+                            maxw = max(maxw, w.sizeHint().width() + 10)
+        self.setColumnWidth(1, maxw)
 
     def _remove_item(self, item: QTreeWidgetItem):
         if item.parent():
@@ -247,7 +277,6 @@ class DropTreeWidget(QTreeWidget):
             meta = {}
         if meta.get('type') != 'dir' or meta.get('populated') or self.get_files_cb is None:
             return
-
         dir_path = item.text(0)
         files = self.get_files_cb([dir_path]) or []
         for fp in files:
@@ -257,37 +286,33 @@ class DropTreeWidget(QTreeWidget):
             child.setData(0, ROLE_META, {'type': 'file'})
             item.addChild(child)
             self._attach_remove_button(child)
-
         meta['populated'] = True
         item.setData(0, ROLE_META, meta)
-
         if not bool(item.data(0, ROLE_HOOKED)):
             def propagate(state: Qt.CheckState):
                 for j in range(item.childCount()):
                     ch = item.child(j)
                     if ch is not None:
                         ch.setCheckState(0, state)
-
             def on_changed(changed: QTreeWidgetItem, parent=item):
                 if changed is parent:
                     propagate(parent.checkState(0))
-
             self.itemChanged.connect(on_changed)  # type: ignore[arg-type]
             item.setData(0, ROLE_HOOKED, True)
 
-
-# ------------------------ Fenêtre principale ------------------------
-
+# ----- Fenêtre principale -----
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, apply_stylesheet=None, list_themes=None):
         super().__init__()
+        self._apply_stylesheet = apply_stylesheet
+        self._list_themes = list_themes or (lambda: [])
         self.setWindowTitle("Concatenator - Sélection & concaténation")
         self.setWindowIcon(ico("app.svg", QSize(24, 24)))
         self.resize(980, 680)
 
-        # Style Fusion agréable
         from PySide6.QtWidgets import QApplication
-        QApplication.setStyle('Fusion')
+        QApplication.setStyle(CompactStyle("Fusion"))
+
         pal = self.palette()
         pal.setColor(QPalette.ColorRole.Highlight, pal.color(QPalette.ColorRole.Link))
         self.setPalette(pal)
@@ -299,38 +324,51 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        # --- Autosave silencieux (debounce) ---
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
-        self._autosave_timer.setInterval(800)  # ms
+        self._autosave_timer.setInterval(800)
         self._autosave_timer.timeout.connect(
             lambda: self.save_profile_to_settings(self.current_profile_name() or "Défaut")
         )
 
-        # --- Barre Profils (icônes) ---
         prof_row = QHBoxLayout()
+
+        self.cmb_theme = QComboBox()
+        self.cmb_theme.setMinimumWidth(200)
+        lbl_theme = QLabel("Thème :")
+
+        available = set(self._list_themes() or [])
+        preferred = [
+            'dark_amber.xml','dark_blue.xml','dark_cyan.xml','dark_lightgreen.xml','dark_pink.xml',
+            'dark_purple.xml','dark_red.xml','dark_teal.xml','dark_yellow.xml','light_amber.xml',
+            'light_blue.xml','light_blue_500.xml','light_cyan.xml','light_cyan_500.xml',
+            'light_lightgreen.xml','light_lightgreen_500.xml','light_orange.xml','light_pink.xml',
+            'light_pink_500.xml','light_purple.xml','light_purple_500.xml','light_red.xml',
+            'light_red_500.xml','light_teal.xml','light_teal_500.xml','light_yellow.xml'
+        ]
+        items = [t for t in preferred if t in available] or sorted(available)
+        if items:
+            self.cmb_theme.addItems(items)
+        else:
+            self.cmb_theme.setEnabled(False)
+            self.cmb_theme.setToolTip("qt_material non disponible")
+
+        # Case "Mode compact"
+        self.chk_compact = QCheckBox("Mode compact")
+
+        # Profils
         self.cmb_profile = QComboBox()
         self.cmb_profile.setMinimumWidth(220)
-
-        self.btn_prof_new = QToolButton()
-        self.btn_prof_new.setAutoRaise(True)
-        self.btn_prof_new.setIcon(ico("new_profile.svg"))
-        self.btn_prof_new.setIconSize(QSize(18, 18))
-        self.btn_prof_new.setToolTip("Nouveau profil")
-
-        self.btn_prof_rename = QToolButton()
-        self.btn_prof_rename.setAutoRaise(True)
-        self.btn_prof_rename.setIcon(ico("edit.svg"))
-        self.btn_prof_rename.setIconSize(QSize(18, 18))
-        self.btn_prof_rename.setToolTip("Renommer…")
-
-        self.btn_prof_delete = QToolButton()
-        self.btn_prof_delete.setAutoRaise(True)
-        self.btn_prof_delete.setIcon(ico("delete.svg"))
-        self.btn_prof_delete.setIconSize(QSize(18, 18))
-        self.btn_prof_delete.setToolTip("Supprimer le profil")
+        self.btn_prof_new = QToolButton(); self.btn_prof_new.setAutoRaise(True); self.btn_prof_new.setIcon(ico("new_profile.svg")); self.btn_prof_new.setIconSize(QSize(18, 18))
+        self.btn_prof_rename = QToolButton(); self.btn_prof_rename.setAutoRaise(True); self.btn_prof_rename.setIcon(ico("edit.svg")); self.btn_prof_rename.setIconSize(QSize(18, 18))
+        self.btn_prof_delete = QToolButton(); self.btn_prof_delete.setAutoRaise(True); self.btn_prof_delete.setIcon(ico("delete.svg")); self.btn_prof_delete.setIconSize(QSize(18, 18))
 
         prof_row.addStretch(1)
+        prof_row.addWidget(lbl_theme)
+        prof_row.addWidget(self.cmb_theme)
+        prof_row.addSpacing(8)
+        prof_row.addWidget(self.chk_compact)
+        prof_row.addSpacing(16)
         prof_row.addWidget(QLabel("Profil :"))
         prof_row.addWidget(self.cmb_profile, 1)
         prof_row.addWidget(self.btn_prof_new)
@@ -338,38 +376,23 @@ class MainWindow(QMainWindow):
         prof_row.addWidget(self.btn_prof_delete)
         root.addLayout(prof_row)
 
-        # --- Ligne de boutons haut (tool buttons + poubelle) ---
         top = QHBoxLayout()
-        self.btn_add_files = QToolButton()
-        self.btn_add_files.setAutoRaise(True)
-        self.btn_add_files.setIcon(ico("add_file.svg"))
-        self.btn_add_files.setIconSize(QSize(20, 20))
+        self.btn_add_files = QToolButton(); self.btn_add_files.setAutoRaise(True); self.btn_add_files.setIcon(ico("add_file.svg")); self.btn_add_files.setIconSize(QSize(20, 20))
+        self.btn_add_dirs = QToolButton(); self.btn_add_dirs.setAutoRaise(True); self.btn_add_dirs.setIcon(ico("add_folder.svg")); self.btn_add_dirs.setIconSize(QSize(20, 20))
+        self.btn_clear = QToolButton(); self.btn_clear.setAutoRaise(True); self.btn_clear.setIcon(ico("delete.svg")); self.btn_clear.setIconSize(QSize(20, 20))
         self.btn_add_files.setToolTip("Ajouter des fichiers…")
-
-        self.btn_add_dirs = QToolButton()
-        self.btn_add_dirs.setAutoRaise(True)
-        self.btn_add_dirs.setIcon(ico("add_folder.svg"))
-        self.btn_add_dirs.setIconSize(QSize(20, 20))
         self.btn_add_dirs.setToolTip("Ajouter des dossiers…")
-
-        self.btn_clear = QToolButton()
-        self.btn_clear.setAutoRaise(True)
-        self.btn_clear.setIcon(ico("delete.svg"))
-        self.btn_clear.setIconSize(QSize(20, 20))
         self.btn_clear.setToolTip("Vider la liste")
-
         top.addWidget(self.btn_add_files)
         top.addWidget(self.btn_add_dirs)
-        top.addWidget(self.btn_clear)  
+        top.addWidget(self.btn_clear)
         top.addStretch(1)
         root.addLayout(top)
 
-        # --- Splitter: arborescence à gauche, options à droite ---
         self.split = QSplitter()
         self.split.setChildrenCollapsible(False)
         root.addWidget(self.split, 1)
 
-        # Liste/arbre avec drag & drop
         self.listw = DropTreeWidget(
             get_files_cb=lambda roots: self.gather_candidate_files(roots, self.current_options()),
             mark_dirty_cb=self.mark_dirty
@@ -377,11 +400,9 @@ class MainWindow(QMainWindow):
         self.listw.setToolTip("Glissez-déposez des fichiers/dossiers ici")
         self.split.addWidget(self.listw)
 
-        # Panneau options
         opts_panel = QWidget()
         opts_layout = QVBoxLayout(opts_panel)
 
-        # Filtre extensions
         gb_filter = QGroupBox("Filtre d'extensions (vide = tout)")
         ly_filter = QHBoxLayout(gb_filter)
         self.ed_exts = QLineEdit(".py,.ts,.tsx,.js,.java,.kt,.cs,.cpp,.h,.hpp")
@@ -389,7 +410,6 @@ class MainWindow(QMainWindow):
         ly_filter.addWidget(self.ed_exts)
         opts_layout.addWidget(gb_filter)
 
-        # Exclusions dossiers
         gb_ex = QGroupBox("Exclure ces dossiers (noms, virgules)")
         ly_ex = QHBoxLayout(gb_ex)
         self.ed_excludedirs = QLineEdit(".git,node_modules,venv,build,dist,.idea,.vscode,target,bin,obj")
@@ -397,80 +417,46 @@ class MainWindow(QMainWindow):
         ly_ex.addWidget(self.ed_excludedirs)
         opts_layout.addWidget(gb_ex)
 
-        # Cases à cocher
         gb_flags = QGroupBox("Options")
         ly_flags = QVBoxLayout(gb_flags)
-        self.chk_recursive = QCheckBox("Récursif pour les dossiers")
-        self.chk_recursive.setChecked(True)
-        self.chk_headers = QCheckBox("Ajouter un séparateur avec le chemin du fichier")
-        self.chk_headers.setChecked(True)
-        self.chk_ignore_bin = QCheckBox("Ignorer les fichiers binaires")
-        self.chk_ignore_bin.setChecked(True)
-        self.chk_norm_eol = QCheckBox("Normaliser les fins de ligne en \\n")
-        self.chk_norm_eol.setChecked(True)
+        self.chk_recursive = QCheckBox("Récursif pour les dossiers"); self.chk_recursive.setChecked(True)
+        self.chk_headers = QCheckBox("Ajouter un séparateur avec le chemin du fichier"); self.chk_headers.setChecked(True)
+        self.chk_ignore_bin = QCheckBox("Ignorer les fichiers binaires"); self.chk_ignore_bin.setChecked(True)
+        self.chk_norm_eol = QCheckBox("Normaliser les fins de ligne en \\n"); self.chk_norm_eol.setChecked(True)
         ly_flags.addWidget(self.chk_recursive)
         ly_flags.addWidget(self.chk_headers)
         ly_flags.addWidget(self.chk_ignore_bin)
         ly_flags.addWidget(self.chk_norm_eol)
-
-        # Limite taille
         hl_size = QHBoxLayout()
-        self.spin_maxmb = QDoubleSpinBox()
-        self.spin_maxmb.setDecimals(1)
-        self.spin_maxmb.setRange(0.1, 1024.0)
-        self.spin_maxmb.setSingleStep(0.5)
-        self.spin_maxmb.setValue(5.0)
-        hl_size.addWidget(QLabel("Taille max / fichier :"))
-        hl_size.addWidget(self.spin_maxmb)
-        hl_size.addWidget(QLabel("Mo"))
+        self.spin_maxmb = QDoubleSpinBox(); self.spin_maxmb.setDecimals(1); self.spin_maxmb.setRange(0.1, 1024.0); self.spin_maxmb.setSingleStep(0.5); self.spin_maxmb.setValue(5.0)
+        hl_size.addWidget(QLabel("Taille max / fichier :")); hl_size.addWidget(self.spin_maxmb); hl_size.addWidget(QLabel("Mo"))
         ly_flags.addLayout(hl_size)
-
         opts_layout.addWidget(gb_flags)
         opts_layout.addStretch(1)
         self.split.addWidget(opts_panel)
         self.split.setSizes([640, 340])
 
-        # --- Sortie ---
         out_row = QHBoxLayout()
         self.ed_out = QLineEdit(str(pathlib.Path.home() / 'concat.txt'))
-        self.btn_browse_out = QPushButton("Parcourir…")
-        self.btn_browse_out.setMinimumWidth(160)
-        self.btn_open_out = QPushButton("Ouvir")
-        self.btn_open_out.setIcon(ico("open.svg"))
-        self.btn_open_out.setIconSize(QSize(20, 20))
-        self.btn_open_out.setToolTip("Ouvrir le fichier de sortie")
-
-        self.btn_open_out.setMinimumWidth(160)
-
+        self.btn_browse_out = QPushButton("Parcourir…"); self.btn_browse_out.setMinimumWidth(140)
+        self.btn_open_out = QPushButton("Ouvrir"); self.btn_open_out.setIcon(ico("open.svg")); self.btn_open_out.setIconSize(QSize(18, 18)); self.btn_open_out.setMinimumWidth(140)
         out_row.addWidget(QLabel("Fichier de sortie :"))
         out_row.addWidget(self.ed_out, 1)
         out_row.addWidget(self.btn_browse_out)
         out_row.addWidget(self.btn_open_out)
         root.addLayout(out_row)
 
-        # --- Actions ---
         actions = QHBoxLayout()
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.btn_concat = QPushButton("oncaténer")
-        self.btn_concat.setIcon(ico("app.svg", QSize(20, 20)))
-        self.btn_concat.setIconSize(QSize(20, 20))
-        self.btn_concat.setMinimumWidth(160)
-        self.btn_copy = QPushButton("Copier")
-        self.btn_copy.setIcon(ico("copy.svg"))
-        self.btn_copy.setIconSize(QSize(20, 20))
-        self.btn_copy.setToolTip("Copier le résultat dans le presse-papiers")
-        self.btn_copy.setMinimumWidth(160)
+        self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0)
+        self.btn_concat = QPushButton("Concaténer"); self.btn_concat.setIcon(ico("app.svg", QSize(18, 18))); self.btn_concat.setIconSize(QSize(18, 18)); self.btn_concat.setMinimumWidth(140)
+        self.btn_copy = QPushButton("Copier"); self.btn_copy.setIcon(ico("copy.svg")); self.btn_copy.setIconSize(QSize(18, 18)); self.btn_copy.setMinimumWidth(140)
         actions.addWidget(self.progress, 1)
         actions.addWidget(self.btn_concat)
         actions.addWidget(self.btn_copy)
         root.addLayout(actions)
 
-        # Cacher la barre de menu
         self.menuBar().hide()
 
-        # Connexions
         self.btn_add_files.clicked.connect(self.on_add_files)
         self.btn_add_dirs.clicked.connect(self.on_add_dirs)
         self.btn_clear.clicked.connect(self.on_clear)
@@ -478,14 +464,13 @@ class MainWindow(QMainWindow):
         self.btn_concat.clicked.connect(self.on_concat)
         self.btn_copy.clicked.connect(self.on_copy_to_clipboard)
         self.btn_open_out.clicked.connect(self.on_open_out)
-
-        # Profils
+        self.cmb_theme.currentTextChanged.connect(self.on_theme_changed)
+        self.chk_compact.toggled.connect(self.on_compact_toggled)
         self.cmb_profile.currentIndexChanged.connect(self.on_profile_combo_changed)
         self.btn_prof_new.clicked.connect(self.on_profile_new)
         self.btn_prof_rename.clicked.connect(self.on_profile_rename)
         self.btn_prof_delete.clicked.connect(self.on_profile_delete)
 
-        # Marquage dirty
         self.listw.itemChanged.connect(self.mark_dirty)
         self.listw.itemSelectionChanged.connect(self.mark_dirty)
         self.ed_exts.textChanged.connect(self.mark_dirty)
@@ -497,9 +482,118 @@ class MainWindow(QMainWindow):
         self.spin_maxmb.valueChanged.connect(self.mark_dirty)
         self.ed_out.textChanged.connect(self.mark_dirty)
 
-        # Charger profils & état
         self.init_profiles_and_load()
         self._last_profile_name = self.current_profile_name()
+
+        s = QSettings(); s.beginGroup("ui")
+        saved_theme = cast(Optional[str], s.value("theme", None, str))
+        compact = cast(bool, s.value("compact", False, bool))
+        s.endGroup()
+        if isinstance(saved_theme, str) and saved_theme:
+            st = saved_theme if saved_theme.endswith('.xml') else (saved_theme + '.xml')
+            idx = self.cmb_theme.findText(st)
+            if idx >= 0:
+                self.cmb_theme.setCurrentIndex(idx)
+        self.chk_compact.setChecked(compact)
+        self._reapply_theme()  # applique thème + densité au lancement
+
+        for ly in (root, top, opts_layout, actions, out_row, prof_row):
+            ly.setSpacing(4)
+            if hasattr(ly, "setContentsMargins"):
+                ly.setContentsMargins(4, 4, 4, 4)
+
+    # ----- Thème & densité -----
+    def _reapply_theme(self):
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if not isinstance(app, QApplication) or not self._apply_stylesheet:
+            return
+        theme_name = self.cmb_theme.currentText().strip()
+        if not theme_name:
+             return
+        app.setStyleSheet("")
+        extra = {}
+        if self.chk_compact.isChecked():
+            extra["density_scale"] = "-2"
+        try:
+            self._apply_stylesheet(app, theme=theme_name, extra=extra)  # type: ignore[arg-type]
+        except Exception:
+            try:
+                self._apply_stylesheet(app, theme=theme_name)
+            except Exception:
+                pass
+        compact_qss = ""
+        if self.chk_compact.isChecked():
+            compact_qss = """
+/* base */
+QWidget { font-size: 10px; }
+*:disabled { opacity: 1; } /* évite le “fade” trop clair avec qt_material */
+
+/* boutons & outils */
+QPushButton, QToolButton {
+    padding: 1px 6px;
+    margin: 0;
+    min-height: 0;
+    border-width: 1px;
+}
+
+/* champs */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QAbstractSpinBox {
+    padding: 0 4px;
+    min-height: 0;
+}
+QComboBox QAbstractItemView { padding: 0; }
+
+/* group boxes */
+QGroupBox {
+    margin-top: 6px;
+    padding-top: 8px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 6px;
+    padding: 0 2px;
+}
+
+/* listes / arbres / tables */
+QTreeView, QTreeWidget, QTableView {
+    outline: 0;
+    show-decoration-selected: 1;
+    alternate-background-color: palette(alternate-base);
+}
+QHeaderView::section {
+    padding: 2px 4px;
+    height: 18px;
+}
+QTreeView::item, QTreeWidget::item, QTableView::item {
+    height: 18px;
+    padding: 0 2px;
+}
+
+/* splitter et progressbar plus fins */
+QSplitter::handle { width: 3px; }
+QProgressBar { min-height: 10px; margin: 0; }
+
+/* petites icônes par défaut dans les toolbuttons */
+QToolButton { icon-size: 16px; }
+"""
+        app.setStyleSheet(app.styleSheet() + compact_qss)
+        self.setWindowIcon(ico("app.svg", QSize(24, 24)))
+        self._fix_delete_column_width()
+
+    def _fix_delete_column_width(self):
+        try:
+            self.listw.fix_delete_column_width()
+        except Exception:
+            pass
+
+    def on_theme_changed(self, name: str):
+        s = QSettings(); s.beginGroup("ui"); s.setValue("theme", name); s.endGroup()
+        self._reapply_theme()
+
+    def on_compact_toggled(self, on: bool):
+        s = QSettings(); s.beginGroup("ui"); s.setValue("compact", bool(on)); s.endGroup()
+        self._reapply_theme()
 
     # ----- Dirty helpers -----
     def mark_dirty(self, *args):
@@ -694,7 +788,6 @@ class MainWindow(QMainWindow):
             exts = cast(Optional[str], s.value("opts/exts", None, str))
             if exts is not None:
                 self.ed_exts.setText(exts)
-
             exdirs = cast(Optional[str], s.value("opts/excludedirs", None, str))
             if exdirs is not None:
                 self.ed_excludedirs.setText(exdirs)
@@ -735,7 +828,6 @@ class MainWindow(QMainWindow):
             QSettings().setValue("profiles/current", prof_name)
         finally:
             self._block_dirty = False
-
     def init_profiles_and_load(self):
         self.ensure_default_profile()
         last = QSettings().value("profiles/current")
@@ -745,7 +837,7 @@ class MainWindow(QMainWindow):
             self.set_current_profile_name("Défaut")
         self.load_profile_from_settings(self.current_profile_name())
 
-    # ----- Slots -----
+        # ----- Slots -----
     def on_open_out(self):
         path = self.ed_out.text().strip()
         if path and os.path.exists(path):
@@ -796,7 +888,6 @@ class MainWindow(QMainWindow):
         if not paths:
             QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
             return
-
         opts = self.current_options()
         out_path = self.ed_out.text().strip()
         if not out_path:
@@ -807,23 +898,16 @@ class MainWindow(QMainWindow):
         if not files:
             QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
             return
-
         self.progress.setValue(0)
         def cb(i, total):
             self._set_progress(i, total)
             QApplication.processEvents()
-
         written, skipped = concat_to_file(files, opts, out_path, cb)
         self.progress.setValue(100)
-
-        msg = [
-            f"Concaténation terminée : {written} fichier(s) écrit(s).",
-            f"Sortie : {out_path}",
-        ]
+        msg = [f"Concaténation terminée : {written} fichier(s) écrit(s).", f"Sortie : {out_path}",]
         if skipped:
             msg.append("\nFichiers ignorés :")
             msg.extend([f"- {p} ({why})" for p, why in skipped])
-
         QMessageBox.information(self, "Terminé", "".join(msg))
 
     def on_copy_to_clipboard(self):
@@ -832,28 +916,22 @@ class MainWindow(QMainWindow):
         if not paths:
             QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
             return
-
         opts = self.current_options()
         files = self.gather_candidate_files(paths, opts)
         if not files:
             QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
             return
-
         self.progress.setValue(0)
         def cb(i, total):
             self._set_progress(i, total)
             QApplication.processEvents()
-
         final_text, written, skipped = concat_to_string(files, opts, cb)
         self.progress.setValue(100)
-
         QApplication.clipboard().setText(final_text)
-
         msg = [f"Concaténation copiée dans le presse-papiers : {written} fichier(s)."]
         if skipped:
             msg.append("Fichiers ignorés :")
             msg.extend([f"- {p} ({why})" for p, why in skipped])
-
         QMessageBox.information(self, "Presse-papiers", "".join(msg))
 
     def closeEvent(self, event):
