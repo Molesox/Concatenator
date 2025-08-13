@@ -176,11 +176,48 @@ class DropTreeWidget(QTreeWidget):
         return out
 
     def checked_paths(self) -> List[str]:
+        """Retourne tous les chemins cochés, y compris ceux des enfants.
+
+        Un dossier n'est retourné que si tous ses descendants sont cochés.
+        Sinon, seuls les sous-éléments cochés sont listés afin d'exclure
+        précisément les fichiers décochés.
+        """
+
+        def collect(item: QTreeWidgetItem) -> tuple[bool, List[str]]:
+            """Retourne (full, paths) pour l'item.
+
+            * full=True si l'item et tous ses descendants sont cochés.
+            * paths=list des chemins cochés dans ce sous-arbre.
+            """
+
+            if item.checkState(0) != Qt.CheckState.Checked:
+                return False, []
+
+            if item.childCount() == 0:
+                return True, [item.text(0)]
+
+            all_checked = True
+            paths: List[str] = []
+            for j in range(item.childCount()):
+                ch = item.child(j)
+                if ch is None:
+                    continue
+                ch_full, ch_paths = collect(ch)
+                if not ch_full:
+                    all_checked = False
+                paths.extend(ch_paths)
+
+            if all_checked:
+                return True, [item.text(0)]
+            return True, paths
+
         out: List[str] = []
         for i in range(self.topLevelItemCount()):
             it = self.topLevelItem(i)
-            if it is not None and it.checkState(0) == Qt.CheckState.Checked:
-                out.append(it.text(0))
+            if it is None:
+                continue
+            _, paths = collect(it)
+            out.extend(paths)
         return out
 
     # --- internes ---
@@ -746,8 +783,8 @@ class MainWindow(QMainWindow):
             normalize_eol=self.chk_norm_eol.isChecked(),
         )
 
-    def gather_candidate_files(self, roots: Iterable[str], opts: Options) -> List[str]:
-        return gather_candidate_files(roots, opts)
+    def gather_candidate_files(self, paths: Iterable[str], opts: Options) -> List[str]:
+        return gather_candidate_files(paths, opts)
 
     def _set_progress(self, i: int, total: int):
         pct = int(i * 100 / max(1, total))
@@ -755,8 +792,8 @@ class MainWindow(QMainWindow):
 
     def on_concat(self):
         from PySide6.QtWidgets import QApplication
-        roots = self.listw.checked_paths()
-        if not roots:
+        paths = self.listw.checked_paths()
+        if not paths:
             QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
             return
 
@@ -766,7 +803,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Chemin manquant", "Spécifiez un fichier de sortie.")
             return
 
-        files = self.gather_candidate_files(roots, opts)
+        files = self.gather_candidate_files(paths, opts)
         if not files:
             QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
             return
@@ -791,13 +828,13 @@ class MainWindow(QMainWindow):
 
     def on_copy_to_clipboard(self):
         from PySide6.QtWidgets import QApplication
-        roots = self.listw.checked_paths()
-        if not roots:
+        paths = self.listw.checked_paths()
+        if not paths:
             QMessageBox.information(self, "Rien à faire", "Coche au moins un élément (ou ajoutez des fichiers/dossiers).")
             return
 
         opts = self.current_options()
-        files = self.gather_candidate_files(roots, opts)
+        files = self.gather_candidate_files(paths, opts)
         if not files:
             QMessageBox.information(self, "Aucun fichier", "Aucun fichier correspondant aux critères.")
             return
