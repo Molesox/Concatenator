@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import (
     Qt, QMimeData, QSize, QSettings, QUrl, QByteArray, QTimer
 )
-from PySide6.QtWidgets import QProxyStyle, QStyle, QStyleFactory, QStyleOption
+ 
 
 from PySide6.QtGui import QPalette, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
@@ -31,38 +31,7 @@ from core import (
 
 ROLE_META = int(Qt.ItemDataRole.UserRole)
 ROLE_HOOKED = ROLE_META + 1
-
-
-class CompactStyle(QProxyStyle):
-    def __init__(self, base: str = "Fusion"):
-        super().__init__(QStyleFactory.create(base))
-
-    def pixelMetric(
-        self,
-        metric: QStyle.PixelMetric,
-        option: QStyleOption | None = None,
-        widget: QWidget | None = None,
-        ) -> int:
-        # Réduit la plupart des marges/espacements par défaut
-        tiny = 2
-        very_tiny = 1
-        if metric in (
-            QStyle.PixelMetric.PM_DefaultFrameWidth,
-            QStyle.PixelMetric.PM_ButtonMargin,
-            QStyle.PixelMetric.PM_FocusFrameHMargin,
-            QStyle.PixelMetric.PM_FocusFrameVMargin,
-            QStyle.PixelMetric.PM_LayoutLeftMargin,
-            QStyle.PixelMetric.PM_LayoutTopMargin,
-            QStyle.PixelMetric.PM_LayoutRightMargin,
-            QStyle.PixelMetric.PM_LayoutBottomMargin,
-            QStyle.PixelMetric.PM_LayoutHorizontalSpacing,
-            QStyle.PixelMetric.PM_LayoutVerticalSpacing,
-        ):
-            return tiny
-        if metric in (QStyle.PixelMetric.PM_ScrollBarExtent,):
-            return 10  # scrollbars plus fins
-        return super().pixelMetric(metric, option, widget)
-    
+ 
 
 # ----- Icônes (SVG recolorés selon la palette) -----
 def _icons_dir() -> pathlib.Path:
@@ -302,21 +271,12 @@ class DropTreeWidget(QTreeWidget):
 
 # ----- Fenêtre principale -----
 class MainWindow(QMainWindow):
-    def __init__(self, apply_stylesheet=None, list_themes=None):
+    def __init__(self):
         super().__init__()
-        self._apply_stylesheet = apply_stylesheet
-        self._list_themes = list_themes or (lambda: [])
         self.setWindowTitle("Concatenator - Sélection & concaténation")
         self.setWindowIcon(ico("app.svg", QSize(24, 24)))
         self.resize(980, 680)
-
-        from PySide6.QtWidgets import QApplication
-        QApplication.setStyle(CompactStyle("Fusion"))
-
-        pal = self.palette()
-        pal.setColor(QPalette.ColorRole.Highlight, pal.color(QPalette.ColorRole.Link))
-        self.setPalette(pal)
-
+    
         self.dirty = False
         self._block_dirty = False
 
@@ -333,29 +293,6 @@ class MainWindow(QMainWindow):
 
         prof_row = QHBoxLayout()
 
-        self.cmb_theme = QComboBox()
-        self.cmb_theme.setMinimumWidth(200)
-        lbl_theme = QLabel("Thème :")
-
-        available = set(self._list_themes() or [])
-        preferred = [
-            'dark_amber.xml','dark_blue.xml','dark_cyan.xml','dark_lightgreen.xml','dark_pink.xml',
-            'dark_purple.xml','dark_red.xml','dark_teal.xml','dark_yellow.xml','light_amber.xml',
-            'light_blue.xml','light_blue_500.xml','light_cyan.xml','light_cyan_500.xml',
-            'light_lightgreen.xml','light_lightgreen_500.xml','light_orange.xml','light_pink.xml',
-            'light_pink_500.xml','light_purple.xml','light_purple_500.xml','light_red.xml',
-            'light_red_500.xml','light_teal.xml','light_teal_500.xml','light_yellow.xml'
-        ]
-        items = [t for t in preferred if t in available] or sorted(available)
-        if items:
-            self.cmb_theme.addItems(items)
-        else:
-            self.cmb_theme.setEnabled(False)
-            self.cmb_theme.setToolTip("qt_material non disponible")
-
-        # Case "Mode compact"
-        self.chk_compact = QCheckBox("Mode compact")
-
         # Profils
         self.cmb_profile = QComboBox()
         self.cmb_profile.setMinimumWidth(220)
@@ -364,10 +301,9 @@ class MainWindow(QMainWindow):
         self.btn_prof_delete = QToolButton(); self.btn_prof_delete.setAutoRaise(True); self.btn_prof_delete.setIcon(ico("delete.svg")); self.btn_prof_delete.setIconSize(QSize(18, 18))
 
         prof_row.addStretch(1)
-        prof_row.addWidget(lbl_theme)
-        prof_row.addWidget(self.cmb_theme)
+      
         prof_row.addSpacing(8)
-        prof_row.addWidget(self.chk_compact)
+
         prof_row.addSpacing(16)
         prof_row.addWidget(QLabel("Profil :"))
         prof_row.addWidget(self.cmb_profile, 1)
@@ -464,8 +400,7 @@ class MainWindow(QMainWindow):
         self.btn_concat.clicked.connect(self.on_concat)
         self.btn_copy.clicked.connect(self.on_copy_to_clipboard)
         self.btn_open_out.clicked.connect(self.on_open_out)
-        self.cmb_theme.currentTextChanged.connect(self.on_theme_changed)
-        self.chk_compact.toggled.connect(self.on_compact_toggled)
+      
         self.cmb_profile.currentIndexChanged.connect(self.on_profile_combo_changed)
         self.btn_prof_new.clicked.connect(self.on_profile_new)
         self.btn_prof_rename.clicked.connect(self.on_profile_rename)
@@ -484,100 +419,8 @@ class MainWindow(QMainWindow):
 
         self.init_profiles_and_load()
         self._last_profile_name = self.current_profile_name()
-
         s = QSettings(); s.beginGroup("ui")
-        saved_theme = cast(Optional[str], s.value("theme", None, str))
-        compact = cast(bool, s.value("compact", False, bool))
         s.endGroup()
-        if isinstance(saved_theme, str) and saved_theme:
-            st = saved_theme if saved_theme.endswith('.xml') else (saved_theme + '.xml')
-            idx = self.cmb_theme.findText(st)
-            if idx >= 0:
-                self.cmb_theme.setCurrentIndex(idx)
-        self.chk_compact.setChecked(compact)
-        self._reapply_theme()  # applique thème + densité au lancement
-
-        for ly in (root, top, opts_layout, actions, out_row, prof_row):
-            ly.setSpacing(4)
-            if hasattr(ly, "setContentsMargins"):
-                ly.setContentsMargins(4, 4, 4, 4)
-
-    # ----- Thème & densité -----
-    def _reapply_theme(self):
-        from PySide6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if not isinstance(app, QApplication) or not self._apply_stylesheet:
-            return
-        theme_name = self.cmb_theme.currentText().strip()
-        if not theme_name:
-             return
-        app.setStyleSheet("")
-        extra = {}
-        if self.chk_compact.isChecked():
-            extra["density_scale"] = "-2"
-        try:
-            self._apply_stylesheet(app, theme=theme_name, extra=extra)  # type: ignore[arg-type]
-        except Exception:
-            try:
-                self._apply_stylesheet(app, theme=theme_name)
-            except Exception:
-                pass
-        compact_qss = ""
-        if self.chk_compact.isChecked():
-            compact_qss = """
-/* base */
-QWidget { font-size: 10px; }
-*:disabled { opacity: 1; } /* évite le “fade” trop clair avec qt_material */
-
-/* boutons & outils */
-QPushButton, QToolButton {
-    padding: 1px 6px;
-    margin: 0;
-    min-height: 0;
-    border-width: 1px;
-}
-
-/* champs */
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QAbstractSpinBox {
-    padding: 0 4px;
-    min-height: 0;
-}
-QComboBox QAbstractItemView { padding: 0; }
-
-/* group boxes */
-QGroupBox {
-    margin-top: 6px;
-    padding-top: 8px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 6px;
-    padding: 0 2px;
-}
-
-/* listes / arbres / tables */
-QTreeView, QTreeWidget, QTableView {
-    outline: 0;
-    show-decoration-selected: 1;
-    alternate-background-color: palette(alternate-base);
-}
-QHeaderView::section {
-    padding: 2px 4px;
-    height: 18px;
-}
-QTreeView::item, QTreeWidget::item, QTableView::item {
-    height: 18px;
-    padding: 0 2px;
-}
-
-/* splitter et progressbar plus fins */
-QSplitter::handle { width: 3px; }
-QProgressBar { min-height: 10px; margin: 0; }
-
-/* petites icônes par défaut dans les toolbuttons */
-QToolButton { icon-size: 16px; }
-"""
-        app.setStyleSheet(app.styleSheet() + compact_qss)
         self.setWindowIcon(ico("app.svg", QSize(24, 24)))
         self._fix_delete_column_width()
 
@@ -586,14 +429,6 @@ QToolButton { icon-size: 16px; }
             self.listw.fix_delete_column_width()
         except Exception:
             pass
-
-    def on_theme_changed(self, name: str):
-        s = QSettings(); s.beginGroup("ui"); s.setValue("theme", name); s.endGroup()
-        self._reapply_theme()
-
-    def on_compact_toggled(self, on: bool):
-        s = QSettings(); s.beginGroup("ui"); s.setValue("compact", bool(on)); s.endGroup()
-        self._reapply_theme()
 
     # ----- Dirty helpers -----
     def mark_dirty(self, *args):
