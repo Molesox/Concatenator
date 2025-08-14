@@ -10,7 +10,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtGui import QPainter, QColor, QPalette, QDesktopServices, QIcon, QPixmap, QFont
 from PySide6.QtCore import Qt, QMimeData, QSize, QSettings, QUrl, QByteArray, QTimer
 from PySide6.QtWidgets import (
-    QApplication,
+    QApplication,QDockWidget, QTextEdit,
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeWidget, QTreeWidgetItem,
     QPushButton, QFileDialog, QLineEdit,
@@ -96,7 +96,6 @@ def get_item_fullpath(item: QTreeWidgetItem) -> str:
     if isinstance(meta, dict) and 'fullpath' in meta:
         return cast(str, meta['fullpath'])
     return item.text(0)
-
 
 # ----- Liste avec DnD + colonne bouton supprimer -----
 class DropTreeWidget(QTreeWidget):
@@ -296,7 +295,6 @@ class DropTreeWidget(QTreeWidget):
             self.itemChanged.connect(on_changed)  # type: ignore[arg-type]
             item.setData(0, ROLE_HOOKED, True)
 
-
 # ----- Fenêtre principale -----
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -310,61 +308,56 @@ class MainWindow(QMainWindow):
         self._cancel_concat = False
         self._concat_running = False
 
+        self._autosave_timer = QTimer(self) 
+        self._autosave_timer.setSingleShot(True) 
+        self._autosave_timer.setInterval(800) 
+        self._autosave_timer.timeout.connect( lambda: self.save_profile_to_settings(self.current_profile_name() or "Défaut") )
+        
+        # --- Fenêtre / central “vide” (obligatoire pour QMainWindow) ---
         central = QWidget()
-        self.setCentralWidget(central)
-        root = QVBoxLayout(central)
+        self.setCentralWidget(central)   # on ne l'utilise pas, tout est en dock
+        self.menuBar().hide()
 
-        self._autosave_timer = QTimer(self)
-        self._autosave_timer.setSingleShot(True)
-        self._autosave_timer.setInterval(800)
-        self._autosave_timer.timeout.connect(
-            lambda: self.save_profile_to_settings(self.current_profile_name() or "Défaut")
-        )
-
-        prof_row = QHBoxLayout()
-
-        # Profils
-        self.cmb_profile = QComboBox()
-        self.cmb_profile.setMinimumWidth(220)
-        self.btn_prof_new = QToolButton(); self.btn_prof_new.setAutoRaise(True); self.btn_prof_new.setIcon(ico("new_profile.svg")); self.btn_prof_new.setIconSize(QSize(18, 18))
-        self.btn_prof_rename = QToolButton(); self.btn_prof_rename.setAutoRaise(True); self.btn_prof_rename.setIcon(ico("edit.svg")); self.btn_prof_rename.setIconSize(QSize(18, 18))
-        self.btn_prof_delete = QToolButton(); self.btn_prof_delete.setAutoRaise(True); self.btn_prof_delete.setIcon(ico("delete.svg")); self.btn_prof_delete.setIconSize(QSize(18, 18))
-       
-      
-        prof_row.addWidget(QLabel("Profil :"))
+        # ----- PROFIL -----
+        prof_bar = QWidget()
+        prof_row = QHBoxLayout(prof_bar)
+        self.cmb_profile = QComboBox(); self.cmb_profile.setMinimumWidth(220)
+        self.btn_prof_new = QToolButton(); self.btn_prof_new.setAutoRaise(True); self.btn_prof_new.setIcon(ico("new_profile.svg")); self.btn_prof_new.setIconSize(QSize(18,18))
+        self.btn_prof_rename = QToolButton(); self.btn_prof_rename.setAutoRaise(True); self.btn_prof_rename.setIcon(ico("edit.svg")); self.btn_prof_rename.setIconSize(QSize(18,18))
+        self.btn_prof_delete = QToolButton(); self.btn_prof_delete.setAutoRaise(True); self.btn_prof_delete.setIcon(ico("delete.svg")); self.btn_prof_delete.setIconSize(QSize(18,18))
+ 
         prof_row.addWidget(self.cmb_profile, 1)
         prof_row.addWidget(self.btn_prof_new)
         prof_row.addWidget(self.btn_prof_rename)
         prof_row.addWidget(self.btn_prof_delete)
-        root.addLayout(prof_row)
 
-        top = QHBoxLayout()
-        self.btn_add_files = QToolButton(); self.btn_add_files.setAutoRaise(True); self.btn_add_files.setIcon(ico("add_file.svg")); self.btn_add_files.setIconSize(QSize(20, 20))
-        self.btn_add_dirs = QToolButton(); self.btn_add_dirs.setAutoRaise(True); self.btn_add_dirs.setIcon(ico("add_folder.svg")); self.btn_add_dirs.setIconSize(QSize(20, 20))
-        self.btn_reload = QToolButton(); self.btn_reload.setAutoRaise(True); self.btn_reload.setIcon(ico("refresh.svg")); self.btn_reload.setIconSize(QSize(20, 20))
-        self.btn_clear = QToolButton(); self.btn_clear.setAutoRaise(True); self.btn_clear.setIcon(ico("delete.svg")); self.btn_clear.setIconSize(QSize(20, 20))
-        self.btn_add_files.setToolTip("Ajouter des fichiers…")
-        self.btn_add_dirs.setToolTip("Ajouter des dossiers…")
-        self.btn_reload.setToolTip("Recharger les dossiers (rescanner le contenu)")
-        self.btn_clear.setToolTip("Vider la liste")
-        top.addWidget(self.btn_add_files)
-        top.addWidget(self.btn_add_dirs)
-        top.addWidget(self.btn_reload)
-        top.addWidget(self.btn_clear)
-        top.addStretch(1)
-        root.addLayout(top)
+        dock_profile = self._make_dock(prof_bar, "Profil")
 
-        self.split = QSplitter()
-        self.split.setChildrenCollapsible(False)
-        root.addWidget(self.split, 1)
+        # ----- SOURCES : toolbar + treeview -----
+        # Toolbar
+        top_bar_w = QWidget()
+        top = QHBoxLayout(top_bar_w); top.setContentsMargins(0,0,0,0)
+        self.btn_add_files = QToolButton(); self.btn_add_files.setAutoRaise(True); self.btn_add_files.setIcon(ico("add_file.svg")); self.btn_add_files.setIconSize(QSize(20,20)); self.btn_add_files.setToolTip("Ajouter des fichiers…")
+        self.btn_add_dirs  = QToolButton(); self.btn_add_dirs.setAutoRaise(True); self.btn_add_dirs.setIcon(ico("add_folder.svg")); self.btn_add_dirs.setIconSize(QSize(20,20)); self.btn_add_dirs.setToolTip("Ajouter des dossiers…")
+        self.btn_reload    = QToolButton(); self.btn_reload.setAutoRaise(True); self.btn_reload.setIcon(ico("refresh.svg")); self.btn_reload.setIconSize(QSize(20,20)); self.btn_reload.setToolTip("Recharger les dossiers (rescanner le contenu)")
+        self.btn_clear     = QToolButton(); self.btn_clear.setAutoRaise(True); self.btn_clear.setIcon(ico("delete.svg")); self.btn_clear.setIconSize(QSize(20,20)); self.btn_clear.setToolTip("Vider la liste")
+        top.addWidget(self.btn_add_files); top.addWidget(self.btn_add_dirs); top.addWidget(self.btn_reload); top.addWidget(self.btn_clear); top.addStretch(1)
 
+        # Tree
         self.listw = DropTreeWidget(
             get_files_cb=lambda roots: self.gather_candidate_files(roots, self.current_options()),
             mark_dirty_cb=self.mark_dirty
         )
         self.listw.setToolTip("Glissez-déposez des fichiers/dossiers ici")
-        self.split.addWidget(self.listw)
 
+        src_panel = QWidget()
+        src_layout = QVBoxLayout(src_panel); src_layout.setContentsMargins(4,4,4,4)
+        src_layout.addWidget(top_bar_w)
+        src_layout.addWidget(self.listw, 1)
+
+        dock_sources = self._make_dock(src_panel, "Sources")
+
+        # ----- FILTRES / OPTIONS / EXCLUSIONS -----
         opts_panel = QWidget()
         opts_layout = QVBoxLayout(opts_panel)
 
@@ -398,57 +391,77 @@ class MainWindow(QMainWindow):
         ly_flags.addLayout(hl_size)
         opts_layout.addWidget(gb_flags)
         opts_layout.addStretch(1)
-        self.split.addWidget(opts_panel)
-        self.split.setSizes([640, 340])
+
+        dock_filters = self._make_dock(opts_panel, "Configuration")
+
+        # ----- SORTIE + ACTIONS -----
+        out_actions_panel = QWidget()
+        va = QVBoxLayout(out_actions_panel); va.setContentsMargins(4,4,4,4)
 
         out_row = QHBoxLayout()
         self.ed_out = QLineEdit(str(pathlib.Path.home() / 'concat.txt'))
         self.btn_browse_out = QPushButton("Parcourir…"); self.btn_browse_out.setMinimumWidth(140)
-        self.btn_open_out = QPushButton("Ouvrir"); self.btn_open_out.setIcon(ico("open.svg")); self.btn_open_out.setIconSize(QSize(18, 18)); self.btn_open_out.setMinimumWidth(140)
-        out_row.addWidget(QLabel("Fichier de sortie :"))
+        self.btn_open_out = QPushButton("Ouvrir"); self.btn_open_out.setIcon(ico("open.svg")); self.btn_open_out.setIconSize(QSize(18,18)); self.btn_open_out.setMinimumWidth(140)
         out_row.addWidget(self.ed_out, 1)
         out_row.addWidget(self.btn_browse_out)
         out_row.addWidget(self.btn_open_out)
-        root.addLayout(out_row)
 
         actions = QHBoxLayout()
-        self.progress = QProgressBar(); self.progress.setRange(0, 100); self.progress.setValue(0)
-        self.btn_concat = QPushButton("Concaténer"); self.btn_concat.setIcon(ico("app.svg", QSize(18, 18))); self.btn_concat.setIconSize(QSize(18, 18)); self.btn_concat.setMinimumWidth(140)
-        self.btn_copy = QPushButton("Copier"); self.btn_copy.setIcon(ico("copy.svg")); self.btn_copy.setIconSize(QSize(18, 18)); self.btn_copy.setMinimumWidth(140)
+        self.progress = QProgressBar(); self.progress.setRange(0,100); self.progress.setValue(0)
+        self.btn_concat = QPushButton("oncaténer"); self.btn_concat.setIcon(ico("app.svg", QSize(18,18))); self.btn_concat.setIconSize(QSize(18,18)); self.btn_concat.setMinimumWidth(140)
+        self.btn_copy = QPushButton("Copier"); self.btn_copy.setIcon(ico("copy.svg")); self.btn_copy.setIconSize(QSize(18,18)); self.btn_copy.setMinimumWidth(140)
         actions.addWidget(self.progress, 1)
         actions.addWidget(self.btn_concat)
         actions.addWidget(self.btn_copy)
-        root.addLayout(actions)
 
-        # ----- Footer notifications (3/4) + branding (1/4) -----
-        footer = QHBoxLayout()
-        self.cmb_notifs = QComboBox()
-        self.cmb_notifs.setInsertPolicy(QComboBox.InsertPolicy.InsertAtTop)
-        self.cmb_notifs.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.cmb_notifs.setToolTip("Ouvrez pour voir les dernières notifications")
-        self.cmb_notifs.setStyleSheet("""
-            QComboBox {
-                padding: 3px 15px;
-                border: 1px solid rgba(128,128,128,0.35);
-                border-radius: 2px;
-                background: rgba(0,0,0,0.03);
-                font-size: 12px;
-            }
-            QComboBox::drop-down {
-                width: 24px;
-                border: 0;
-            }
-            QComboBox QAbstractItemView {
-                border: 1px solid rgba(128,128,128,0.35);
-                selection-background-color: rgba(0,0,0,0.07);
-                outline: 0;
-            }
-        """)
-        footer.addWidget(self.cmb_notifs, 3)
-      
-        root.addLayout(footer)
+        va.addLayout(out_row)
+        va.addLayout(actions)
 
-        self.menuBar().hide()
+        dock_actions = self._make_dock(out_actions_panel, "Sortie")
+
+        # ----- LOGS -----
+        self.logs = QTextEdit()
+        self.logs.setReadOnly(True)
+        self.logs.setObjectName("LogsText")
+
+        dock_logs = self._make_dock(self.logs, "Logs")
+
+        # ----- Placement des docks -----
+        # Colonne de gauche (haut->bas) : Profil / Sources / Filtres
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_profile)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_sources)
+        self.splitDockWidget(dock_profile, dock_sources, Qt.Orientation.Vertical)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_filters)
+        self.splitDockWidget(dock_sources, dock_filters, Qt.Orientation.Vertical)
+
+        # Droite : Sortie & Actions
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_actions)
+
+        # Bas (sur toute la largeur) : Logs
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_logs)
+
+        # Tailles initiales approximatives (facultatif)
+        self.resizeDocks([dock_profile, dock_sources, dock_filters], [80, 420, 180], Qt.Orientation.Vertical)
+        self.resizeDocks([dock_actions], [360], Qt.Orientation.Horizontal)
+
+        # Notif d’accueil légère
+        self.notify("Prêt.", details="Glissez-déposez des fichiers ou dossiers, puis Concaténer / Copier.")
+
+        docks = [dock_profile, dock_sources, dock_filters, dock_actions, dock_logs]
+
+        # 1) Sauvegarder quand un dock change d’emplacement (zone ou position dans la zone)
+        for d in docks:
+            d.dockLocationChanged.connect(
+                lambda area, dock=d: self._on_dock_location_changed(dock, area)
+            )
+            # 2) Sauvegarder quand il passe flottant ↔ ancré
+            d.topLevelChanged.connect(lambda _=False: self._autosave_timer.start())
+            # 3) Sauvegarder quand la visibilité change (fermé/ouvert)
+            d.visibilityChanged.connect(lambda _=False: self._autosave_timer.start())
+
+
+        self.tabifiedDockWidgetActivated.connect(lambda _dock: self._autosave_timer.start())
+
 
         # Connexions
         self.btn_add_files.clicked.connect(self.on_add_files)
@@ -488,31 +501,62 @@ class MainWindow(QMainWindow):
 
     # ----- Notifications -----
     def notify(self, message: str, level: str = "info", details: Optional[str] = None):
-        """
-        Ajoute une notification en tête de la combo (historique max 4).
-        - message: texte court visible
-        - details: texte long en infobulle (optionnel)
-        """
         text = message.strip()
         if not text:
             return
-        # Insérer en tête
-        self.cmb_notifs.insertItem(0, text)
-        if details:
-            self.cmb_notifs.setItemData(0, details, Qt.ItemDataRole.ToolTipRole)
-        else:
-            self.cmb_notifs.setItemData(0, text, Qt.ItemDataRole.ToolTipRole)
-        self.cmb_notifs.setCurrentIndex(0)
-        # Limiter à 4
-        while self.cmb_notifs.count() > 4:
-            self.cmb_notifs.removeItem(self.cmb_notifs.count() - 1)
+        # Nouveau : log étendu
+        if hasattr(self, "logs") and self.logs is not None:
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            if details:
+                self.logs.append(f"[{ts}] {text}\n{details}\n")
+            else:
+                self.logs.append(f"[{ts}] {text}\n")
+
 
     # ----- Divers helpers UI -----
+
+    def _on_dock_location_changed(self, dock: QDockWidget, area: Qt.DockWidgetArea):
+        # déclenche l’autosave
+        self._autosave_timer.start()
+
+        # nom du dock
+        name = (dock.objectName() or dock.windowTitle() or "(dock)")
+
+        # libellé lisible de la zone
+        area_names = {
+            Qt.DockWidgetArea.LeftDockWidgetArea: "Left",
+            Qt.DockWidgetArea.RightDockWidgetArea: "Right",
+            Qt.DockWidgetArea.TopDockWidgetArea: "Top",
+            Qt.DockWidgetArea.BottomDockWidgetArea: "Bottom",
+            Qt.DockWidgetArea.NoDockWidgetArea: "Floating",
+        }
+
+        # éviter int(area) → utilise name/value/str
+        human = area_names.get(
+            area,
+            getattr(area, "name", str(area))  # ex: "DockWidgetArea.LeftDockWidgetArea"
+        )
+
+        # petite mise au propre si besoin
+        if isinstance(human, str) and "DockWidgetArea." in human:
+            human = human.split("DockWidgetArea.", 1)[-1]
+
+        self.notify("Dock déplacé.", details=f"{name} → {human}")
+
+        
     def _fix_delete_column_width(self):
         try:
             self.listw.fix_delete_column_width()
         except Exception:
             pass
+    
+    def _make_dock(self, child: QWidget, name: str) -> QDockWidget:
+        dock = QDockWidget(name, self)
+        dock.setObjectName(name)
+        dock.setWidget(child)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)  # ok
+        dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        return dock
 
     # ----- Dirty helpers -----
     def mark_dirty(self, *args):
@@ -667,7 +711,7 @@ class MainWindow(QMainWindow):
 
         s.setValue("ui/geometry", self.saveGeometry())
         s.setValue("ui/state", self.saveState())
-        s.setValue("ui/splitter_sizes", self.split.sizes())
+ 
 
         s.endGroup()
         s.endGroup()
@@ -734,12 +778,6 @@ class MainWindow(QMainWindow):
             st = cast(Optional[QByteArray], s.value("ui/state", None))
             if st:
                 self.restoreState(st)
-            split_sizes = cast(Optional[list[int]], s.value("ui/splitter_sizes", None, list))
-            if split_sizes:
-                try:
-                    self.split.setSizes([int(x) for x in split_sizes])
-                except Exception:
-                    pass
 
             s.endGroup()
             s.endGroup()
@@ -880,7 +918,7 @@ class MainWindow(QMainWindow):
                 details_lines.append(preview)
             self.notify("Concaténation terminée.", details="\n".join(details_lines))
         finally:
-            self.btn_concat.setText("Concaténer")
+            self.btn_concat.setText("oncaténer") # not a spelling mistake
             self._concat_running = False
             self._cancel_concat = False
 
