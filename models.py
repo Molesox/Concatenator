@@ -13,3 +13,5 @@ class Options:
     max_mb: float
     add_headers: bool
     normalize_eol: bool
+    cs_remove_comments: bool = False
+    cs_remove_usings: bool = False

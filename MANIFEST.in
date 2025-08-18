@@ -1,0 +1,4 @@
+include RoslynCleaner/*.cs
+include RoslynCleaner/*.csproj
+prune RoslynCleaner/publish
+prune build

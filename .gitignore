@@ -20,3 +20,6 @@ Thumbs.db
 documentation.md
 *.patch
 test.py
+RoslynCleaner/bin/
+RoslynCleaner/obj/
+RoslynCleaner/publish/

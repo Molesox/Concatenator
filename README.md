@@ -19,6 +19,7 @@ Idéal pour développeurs, analystes ou toute personne travaillant avec de gros 
 - Ajouter un en-tête avec le chemin source
 - Sauvegarder et recharger vos profils de paramètres
 - Barre de progression + copie directe dans le presse-papiers
+- Nettoyage optionnel de fichiers **C#** via Roslyn (suppression des commentaires et `using`)
 
 ---
 
@@ -56,6 +57,11 @@ Ou installation directe comme package :
 pip install .
 concatenator
 ```
+
+### Dépendance .NET/Roslyn
+
+Un utilitaire C# (`RoslynCleaner`) est utilisé pour nettoyer les fichiers `.cs`.
+Le **.NET SDK 8.0** est requis pour compiler cet outil; le binaire est généré automatiquement lors du packaging.
 
 ---
 
