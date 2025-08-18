@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 from typing import Iterable, List, Set, Tuple, Callable
+import subprocess
 
 from models import Options
 
@@ -106,6 +107,34 @@ def _normalize_eol(text: str) -> str:
     return text.replace('\r\n', '\n').replace('\r', '\n')
 
 
+def clean_csharp(text: str, remove_comments: bool, remove_usings: bool) -> str:
+    """Nettoie du code C# via le binaire RoslynCleaner."""
+    if not (remove_comments or remove_usings):
+        return text
+    try:
+        root = pathlib.Path(__file__).resolve().parent
+        candidates = [
+            root / 'RoslynCleaner' / 'RoslynCleaner.dll',
+            root / 'RoslynCleaner' / 'publish' / 'RoslynCleaner.dll',
+            root / 'RoslynCleaner' / 'bin' / 'Release' / 'net8.0' / 'RoslynCleaner.dll',
+            root / 'RoslynCleaner' / 'bin' / 'Debug' / 'net8.0' / 'RoslynCleaner.dll',
+        ]
+        dll = next((p for p in candidates if p.exists()), None)
+        if dll is None:
+            return text
+        args = ['dotnet', str(dll)]
+        if remove_comments:
+            args.append('--remove-comments')
+        if remove_usings:
+            args.append('--remove-usings')
+        proc = subprocess.run(args, input=text.encode('utf-8'), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode != 0:
+            return text
+        return proc.stdout.decode('utf-8')
+    except Exception:
+        return text
+
+
 def concat_to_file(files: List[str], opts: Options, out_path: str, progress_cb: ProgressCb = None) -> Tuple[int, list[tuple[str, str]]]:
     """
     Écrit la concaténation dans out_path. Retourne (nb_fichiers_écrits, skipped[(path, raison)]).
@@ -133,6 +162,8 @@ def concat_to_file(files: List[str], opts: Options, out_path: str, progress_cb: 
                 content = _read_text_file(fpath)
                 if opts.normalize_eol:
                     content = _normalize_eol(content)
+                if fpath.lower().endswith('.cs') and (opts.cs_remove_comments or opts.cs_remove_usings):
+                    content = clean_csharp(content, opts.cs_remove_comments, opts.cs_remove_usings)
 
                 if opts.add_headers:
                     sep = '=' * 12
@@ -176,6 +207,8 @@ def concat_to_string(files: List[str], opts: Options, progress_cb: ProgressCb = 
             content = _read_text_file(fpath)
             if opts.normalize_eol:
                 content = _normalize_eol(content)
+            if fpath.lower().endswith('.cs') and (opts.cs_remove_comments or opts.cs_remove_usings):
+                content = clean_csharp(content, opts.cs_remove_comments, opts.cs_remove_usings)
 
             if opts.add_headers:
                 sep = '=' * 12

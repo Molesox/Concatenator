@@ -15,6 +15,7 @@ dependencies = ["PySide6>=6.6"]
 
 [tool.setuptools]
 py-modules = ["core", "models", "ui_mainwindow", "main"]
+include-package-data = true
 
 [project.scripts]
 concatenator = "main:main"
