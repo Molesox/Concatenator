@@ -5,6 +5,7 @@ import pathlib
 from typing import Iterable, List, Optional, cast
 import sys
 import datetime
+import html
 
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtGui import QPainter, QColor, QPalette, QDesktopServices, QIcon, QPixmap, QFont
@@ -504,13 +505,20 @@ class MainWindow(QMainWindow):
         text = message.strip()
         if not text:
             return
-        # Nouveau : log étendu
         if hasattr(self, "logs") and self.logs is not None:
             ts = datetime.datetime.now().strftime("%H:%M:%S")
+            colors = {
+                "info": "#000000",
+                "warn": "#d17a00",
+                "error": "#b00020",
+            }
+            color = colors.get(level, "#000000")
+            main = html.escape(text)
+            msg = f"[{ts}] {main}"
             if details:
-                self.logs.append(f"[{ts}] {text}\n{details}\n")
-            else:
-                self.logs.append(f"[{ts}] {text}\n")
+                extra = html.escape(details).replace("\n", "<br/>")
+                msg += f"<br/>{extra}"
+            self.logs.append(f"<span style='color:{color}'>{msg}</span>")
 
 
     # ----- Divers helpers UI -----
